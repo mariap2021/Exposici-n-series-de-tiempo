@@ -1,0 +1,291 @@
+---
+title: "uuuu"
+author: "Maria Del Pilar"
+date: '2022-11-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## para ts:
+
+
+##Paquetes
+```{r}
+install.packages("readxl")
+install.packages("tidyr")
+install.packages("lubridate")
+install.packages("lmtest")
+install.packages("janitor")
+install.packages("forecast")
+library(janitor)
+library(readxl)
+library(lmtest)
+install.packages("dplyr")
+install.packages("magrittr")
+install.packages("ggplot2")
+install.packages("tsoutliers")
+library(tsoutliers)
+library(dplyr)
+library(tidyr)
+library(magrittr)
+library(ggplot2)
+library(forecast)
+library(lubridate)
+
+
+
+
+```
+
+
+## Lectura bases
+
+```{r}
+
+inf<- read_excel("C:/Users/Pilar/Downloads/inflacion_t.xlsx",sheet = 1)
+tasa<- read_excel("C:/Users/Pilar/Downloads/tasainteres.xlsx",sheet = 1)
+```
+
+
+
+
+
+
+
+
+##Limpieza base de datos
+
+```{r}
+inf<-inf[-c(809,810,811),]
+
+tasa<-tasa[-c(1,2,3,4,5,6,7,8727,8728,8729,8730),]
+
+colnames(inf)[2] = "inflacion"
+colnames(tasa)[1] = "Fecha"
+colnames(tasa)[2] = "tasa"
+
+tasa[2]<-as.numeric(tasa$tasa)
+```
+
+
+
+```{r}
+tasa$Fecha<-as.numeric(tasa$Fecha)
+inf$Fecha %>% as.Date(format = "%Y/%m/%d")
+
+inf$Fecha<-ymd(inf$Fecha)
+
+tasa$Fecha<-as.Date(tasa$Fecha,origin=("1899/12/30"))
+
+```
+
+
+##Juntamos las bases
+```{r}
+base <- merge(inf, tasa, by = "Fecha")
+
+base2<- gather(base, key="Serie", value="Valor", 2:3)
+```
+
+
+
+
+##paso la base datprueb a ts
+```{r}
+ts0 <- ts(base$tasa, start=c(1999,1),
+frequency = 12)
+
+
+
+
+```
+
+
+
+```{r,cache=TRUE}
+modelo = auto.arima(ts0, xreg = model.matrix(~base$inflacion)[,-1],stepwise = F, approximation = F)
+summary(modelo)
+modelo %>% coeftest()
+```
+
+```{r}
+n=1
+ndat=length(base$Fecha)
+
+
+if(n!=0){
+ base6 = data.frame("Fecha" = base[-((ndat+1)-seq(n)),1],
+                    "inflacion" = base[-((ndat+1)-seq(n)),2],
+                    "tasa" = base[-seq(n),3]) 
+  
+}else{
+  base6=base
+}
+
+summary(lm(tasa~inflacion,data = base6))$r.squared
+
+
+```
+
+
+
+```{r}
+ts1 <- ts(base6$tasa, start=c(1999,1),
+frequency = 12)
+
+
+
+
+```
+
+
+
+```{r,cache=TRUE}
+modelo1 = auto.arima(ts1, xreg = model.matrix(~base6$inflacion)[,-1],stepwise = F, approximation = F,ic="bic")
+summary(modelo1)
+modelo1 %>% coeftest()
+ggseasonplot(ts1, polar = TRUE)
+```
+
+
+## Train y test
+
+
+
+```{r,cache=TRUE}
+train1 <- window(ts1, start = c(1999,1),
+end=c(2020,12))
+
+cova=base6$inflacion[1:length(train1)]
+dis1=model.matrix(~-1+cova)
+
+test1 <- window(ts1, start = c(2021,1),
+end= c(2022,9))
+testdi=model.matrix(~-1+base6$tasa[265:285])
+
+modelo_train1 <- auto.arima(train1,xreg=base6$inflacion[1:length(train1)], stepwise = FALSE,
+approximation = FALSE,ic="bic")
+
+modelo_train1%>% coeftest()
+
+summary(modelo_train1)
+checkresiduals(modelo_train1,plot=T)
+modelo_train1$residuals %>% shapiro.test()
+qqnorm(modelo_train1$residuals)
+qqline(modelo_train1$residuals)
+```
+
+
+
+
+
+```{r,cache=TRUE}
+
+
+
+fore3 <- forecast(modelo_train1, xreg = testdi,
+h = nrow(test1))
+
+test<-as.data.frame(base6$tasa[265:285])
+test$Fecha<-base6$Fecha[265:285]
+test$pred <- fore3$mean
+test$li95 <- fore3$lower[,2]
+test$ls95 <- fore3$upper[,2]
+
+ggplot(base6, aes(x=Fecha, y=tasa))+ geom_line()+
+geom_line(data=test, aes(x=Fecha, y=pred), col="red")+
+geom_line(data=test, aes(x=Fecha, y=li95), col="blue")+
+geom_line(data=test, aes(x=Fecha, y=ls95), col="blue")
+
+```
+```{r}
+
+accuracy(fore3, testdi)
+```
+
+## Con outliers
+
+
+
+```{r,cache=TRUE}
+
+
+require(TSstudio)
+library(TSstudio)
+
+
+```
+
+
+
+
+
+```{r}
+delta <- seq(0.1, 0.90, 0.1)
+aic_1 <- vector()
+ljungbox1 <- vector()
+i = 0
+for(d in delta){
+i = i+1
+modelo_outl <- tso(train1,xreg= base6$inflacion[1:length(train1)], delta=d)
+aic_1[i] <- modelo_outl$fit$aic
+ljungbox1[i] <- checkresiduals(modelo_outl$fit,
+plot = FALSE)$p.value
+}
+```
+```{r}
+which.min(aic_1)
+delta[9]
+```
+
+
+```{r,warning=FALSE}
+modelo_outl <- tso(train1, xreg=dis1, delta=0.9)
+modelo_outl
+new<- outliers.effects(modelo_outl$outliers,
+length(train1) + 21)
+new <- ts(new[-seq_along(train1),],
+start = c(2021,1))
+
+dis2=model.matrix(~-1+testdi+new)
+colnames(dis2)[1] = "cova"
+fore2 <- forecast(modelo_outl$fit, h=21,
+xreg = dis2)
+accuracy(fore2, testdi)
+```
+
+```{r,cache=TRUE}
+
+
+
+test<-as.data.frame(base6$tasa[265:285])
+test$Fecha<-base6$Fecha[265:285]
+test$pred <- fore2$mean
+test$li95 <- fore2$lower[,2]
+test$ls95 <- fore2$upper[,2]
+
+ggplot(base6, aes(x=Fecha, y=tasa))+ geom_line()+
+geom_line(data=test, aes(x=Fecha, y=pred), col="red")+
+geom_line(data=test, aes(x=Fecha, y=li95), col="blue")+
+geom_line(data=test, aes(x=Fecha, y=ls95), col="blue")
+
+```
+```{r}
+
+
+
+checkresiduals(modelo_outl$fit,
+plot = T)$p.value
+
+
+modelo_outl$fit$residuals %>% shapiro.test()
+
+```
+```{r}
+plot(modelo_outl)
+```
+
